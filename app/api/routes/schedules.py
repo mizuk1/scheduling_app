@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlmodel import Session, select
 
 from app.api.deps import get_db
-from app.models.scheduling import Assignment, Employee, Role, Shift
+from app.models.scheduling import Assignment, Employee, Role, SHIFT_TYPES, Shift
 from app.schemas.scheduling import (
     AssignmentRead,
     AutofillRequest,
@@ -27,7 +27,42 @@ router = APIRouter()
 def autofill_schedule(
     payload: AutofillRequest, session: Session = Depends(get_db)
 ) -> AutofillResponse:
-    results = fill_day(session, payload.date, reoptimize=payload.reoptimize)
+    shift_types = list(SHIFT_TYPES)
+    if payload.shift_type:
+        selected = payload.shift_type.upper()
+        if selected not in SHIFT_TYPES:
+            raise HTTPException(status_code=400, detail="shift_type is invalid")
+        shift_types = [selected]
+
+    requirements_by_shift: dict[str, dict[int, int]] | None = None
+    if payload.requirements:
+        requirements: dict[int, int] = {}
+        for item in payload.requirements:
+            if item.required_count < 0:
+                raise HTTPException(status_code=400, detail="required_count must be >= 0")
+            if session.get(Role, item.role_id) is None:
+                raise HTTPException(status_code=400, detail=f"role not found: {item.role_id}")
+            if item.required_count == 0:
+                continue
+            requirements[item.role_id] = item.required_count
+
+        if not requirements:
+            raise HTTPException(
+                status_code=400,
+                detail="requirements must include at least one item with required_count > 0",
+            )
+
+        requirements_by_shift = {
+            shift_type: dict(requirements) for shift_type in shift_types
+        }
+
+    results = fill_day(
+        session,
+        payload.date,
+        reoptimize=payload.reoptimize,
+        requirements_by_shift=requirements_by_shift,
+        shift_types=shift_types,
+    )
     return build_autofill_response(payload.date, results)
 
 

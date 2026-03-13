@@ -264,10 +264,18 @@ def _delete_assignments(session: Session, assignments: Iterable[Assignment]) -> 
 
 
 def fill_shift(
-    session: Session, target_date: date, shift_type: str, reoptimize: bool = False
+    session: Session,
+    target_date: date,
+    shift_type: str,
+    reoptimize: bool = False,
+    requirements_override: dict[int, int] | None = None,
 ) -> FillResult:
     day_of_week = get_day_of_week(target_date)
-    requirements = _get_role_requirements(session, day_of_week, shift_type)
+    requirements = (
+        requirements_override
+        if requirements_override is not None
+        else _get_role_requirements(session, day_of_week, shift_type)
+    )
     if not requirements:
         return FillResult(created=0, unfilled={})
 
@@ -329,12 +337,22 @@ def fill_shift(
 
 
 def fill_day(
-    session: Session, target_date: date, reoptimize: bool = False
+    session: Session,
+    target_date: date,
+    reoptimize: bool = False,
+    requirements_by_shift: dict[str, dict[int, int]] | None = None,
+    shift_types: list[str] | None = None,
 ) -> dict[str, FillResult]:
     results: dict[str, FillResult] = {}
-    for shift_type in SHIFT_TYPES:
+    target_shift_types = shift_types or list(SHIFT_TYPES)
+
+    for shift_type in target_shift_types:
         results[shift_type] = fill_shift(
-            session, target_date, shift_type, reoptimize=reoptimize
+            session,
+            target_date,
+            shift_type,
+            reoptimize=reoptimize,
+            requirements_override=(requirements_by_shift or {}).get(shift_type),
         )
     return results
 

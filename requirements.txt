@@ -4,3 +4,4 @@ sqlmodel
 python-dotenv
 pydantic-settings
 pytest
+openai

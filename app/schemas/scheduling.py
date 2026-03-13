@@ -1,6 +1,7 @@
 import datetime as dt
 from typing import Any
 
+from pydantic import model_validator
 from sqlmodel import SQLModel
 
 
@@ -9,6 +10,17 @@ class EmployeeRead(SQLModel):
     name: str
     is_active: bool
     max_weekly_hours: int
+
+
+class EmployeeInsightRead(SQLModel):
+    id: int
+    name: str
+    is_active: bool
+    max_weekly_hours: int
+    worked_hours_week: int
+    remaining_hours_week: int
+    roles: list[str]
+    restrictions: list[str]
 
 
 class RoleRead(SQLModel):
@@ -24,9 +36,16 @@ class AvailabilityRead(SQLModel):
     is_available: bool
 
 
+class RoleRequirement(SQLModel):
+    role_id: int
+    required_count: int
+
+
 class AutofillRequest(SQLModel):
     date: dt.date
     reoptimize: bool = False
+    shift_type: str | None = None
+    requirements: list[RoleRequirement] | None = None
 
 
 class UnfilledRole(SQLModel):
@@ -95,17 +114,39 @@ class ChatAction(SQLModel):
     shift_type: str | None = None
     role_id: int | None = None
     required_count: int | None = None
+    requirements: list[RoleRequirement] | None = None
 
 
 class ChatCommandRequest(SQLModel):
     message: str | None = None
-    action: ChatAction
+    action: ChatAction | None = None
+
+    @model_validator(mode="after")
+    def validate_message_or_action(self) -> "ChatCommandRequest":
+        if not self.message and self.action is None:
+            raise ValueError("either message or action is required")
+        return self
 
 
 class ChatCommandResponse(SQLModel):
     status: str
     action_type: str
     result: Any | None = None
+
+
+class ChatImpactPreview(SQLModel):
+    shifts: int
+    people: int
+    assignments: int
+    summary: str
+
+
+class ChatPreviewResponse(SQLModel):
+    status: str
+    action_type: str
+    action: ChatAction
+    impact: ChatImpactPreview
+    preview_message: str
 
 
 class ScheduleRuleRead(SQLModel):
