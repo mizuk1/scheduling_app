@@ -1,6 +1,86 @@
 # scheduling_app
 Scheduling app with a Python backend, SQLite persistence, and AI-driven chat commands.
 
+## Quickstart
+
+```bash
+python -m venv .venv
+\.\.venv\Scripts\Activate.ps1
+pip install -r requirements.txt
+python scripts/seed.py
+uvicorn app.main:app --reload --port 8010
+```
+
+## API Endpoints
+
+- `GET /health`
+- `GET /employees`
+- `GET /roles`
+- `GET /availabilities`
+- `GET /schedule-rules`
+- `POST /schedules/autofill`
+- `POST /schedules/swap`
+- `GET /assignments`
+- `GET /schedules`
+- `POST /chat/command`
+
+## Chat Command Examples
+
+All chat actions are sent to `POST /chat/command` with a JSON payload.
+
+### Autofill a day
+
+```json
+{
+	"message": "fill wednesday",
+	"action": {
+		"type": "AUTOFILL_DAY",
+		"date": "2026-03-18",
+		"reoptimize": false
+	}
+}
+```
+
+### List schedule for a date range
+
+```json
+{
+	"action": {
+		"type": "LIST_SCHEDULE",
+		"start_date": "2026-03-18",
+		"end_date": "2026-03-18"
+	}
+}
+```
+
+### Swap an assignment
+
+```json
+{
+	"action": {
+		"type": "SWAP_ASSIGNMENT",
+		"assignment_id": 123,
+		"replacement_employee_id": 45
+	}
+}
+```
+
+### Update a staffing rule (SET_RULE)
+
+```json
+{
+	"action": {
+		"type": "SET_RULE",
+		"day_of_week": "MONDAY",
+		"shift_type": "LUNCH",
+		"role_id": 1,
+		"required_count": 3
+	}
+}
+```
+
+Use `GET /roles` to find `role_id`. Valid `day_of_week` values are `MONDAY`-`SUNDAY`, and `shift_type` values are `LUNCH` or `DINNER`.
+
 # Engineering Challenge
 
 ## Intro

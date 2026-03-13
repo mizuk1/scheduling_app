@@ -91,6 +91,10 @@ class ChatAction(SQLModel):
     replacement_employee_id: int | None = None
     start_date: dt.date | None = None
     end_date: dt.date | None = None
+    day_of_week: str | None = None
+    shift_type: str | None = None
+    role_id: int | None = None
+    required_count: int | None = None
 
 
 class ChatCommandRequest(SQLModel):
