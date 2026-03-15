@@ -1,6 +1,6 @@
 # Project Plan
 
-This document explains the project structure, responsibilities, and the execution plan for the scheduling app.
+This document explains the project structure, responsibilities, and the final delivery steps used to complete the scheduling app.
 
 ## 1. Goals and Scope
 
@@ -66,33 +66,38 @@ The default behavior is **non-disruptive**: when filling a new day, existing ass
 - `GET /health`
 - `GET /employees`
 - `GET /schedule-rules`
+- `GET /roles`
+- `GET /schedules`
 - `POST /schedules/autofill`
 - `POST /schedules/swap`
 - `POST /chat`
 
 ## 8. Seed Data Strategy
 
-Seed data is required to avoid cold-start:
+Seed data was used to avoid cold-start and to support realistic test scenarios:
 
-- 12 employees with varied weekly hours limits
-- Roles and staff role mappings
-- Availability with a few realistic constraints
-- Weekday vs weekend staffing rules
+- Core restaurant roles and employee-role mappings
+- Availability constraints per day and shift
+- Rule-driven staffing model (weekday vs weekend)
+- Expanded workforce dataset for stress and end-to-end tests
 
-## 9. Execution Plan
+## 9. Project Completion Steps (Executed)
 
-1. Finalize data model and seed data.
-2. Implement CSP scheduling engine.
-3. Add schedule endpoints (auto-fill + swap).
-4. Integrate chat command parsing and execution.
-5. Build UI to visualize schedules and test chat commands.
+1. Finalized the data model and local persistence with SQLite.
+2. Implemented and validated the CSP scheduler constraints.
+3. Implemented schedule actions: define demand, autofill, and swap/remove with gap refill.
+4. Implemented LLM intent parsing for chat-driven commands.
+5. Enforced chat-only operational flow in the UI (actions are executed through chat).
+6. Added Guide content aligned with challenge requirements and test prompts.
+7. Added unit and integration tests for parser, chat route, and scheduling behavior.
+8. Validated complete flow with large workforce and constraint scenarios.
+9. Documented local run instructions in README and finalized repository delivery.
 
 ## 10. Local Setup
 
 1. Create and activate a virtual environment.
 2. Install requirements.
-3. Run the seed script.
-4. Start FastAPI with Uvicorn.
+3. Start FastAPI with Uvicorn.
 
 Example:
 
@@ -100,6 +105,9 @@ Example:
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
-python scripts/seed.py
-uvicorn app.main:app --reload --port 8010
+.\.venv\Scripts\python.exe -m uvicorn app.main:app --reload
 ```
+
+Open in browser:
+
+`http://127.0.0.1:8000`

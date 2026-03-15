@@ -1,5 +1,18 @@
 # Engineering Challenge
 
+## Run The Project
+1. Create and activate a Python virtual environment.
+2. Install dependencies:
+	- `pip install -r requirements.txt`
+3. Start the application (backend + frontend served by FastAPI):
+	- Windows: `.\.venv\Scripts\python.exe -m uvicorn app.main:app --reload`
+4. Open the app in the browser:
+	- `http://127.0.0.1:8000`
+
+---
+
+## Challenge Text (Original)
+
 ## Intro
 Building the operating system for senior care communities. Our most popular product helps them manage their workforce on a daily basis. To get a feel for what it might be like to work here, and show off your skills as a builder, we challenge you to build a scheduling app!
 
@@ -17,15 +30,6 @@ Your app should support the following functionality:
 - **The Data:** your app should have persistence; SQLite is totally fine or any relational DB you prefer, just keep it local and simple.
 - **The UI:** you must create a UI for viewing the schedule/calendar so we can see the results of the commands.
 - **The Process:** you must create your project in Github so we can see how your work progresses.
-
-## Run The Project
-1. Create and activate a Python virtual environment.
-2. Install dependencies:
-	- `pip install -r requirements.txt`
-3. Start the application (backend + frontend served by FastAPI):
-	- Windows: `.\.venv\Scripts\python.exe -m uvicorn app.main:app --reload`
-4. Open the app in the browser:
-	- `http://127.0.0.1:8000`
 
 ## Tips
 - **Be Fearless with AI:** you are *highly* encouraged to use AI tools (Cursor, Copilot, Claude Code, etc). There are zero limits.
