@@ -18,6 +18,15 @@ Your app should support the following functionality:
 - **The UI:** you must create a UI for viewing the schedule/calendar so we can see the results of the commands.
 - **The Process:** you must create your project in Github so we can see how your work progresses.
 
+## Run The Project
+1. Create and activate a Python virtual environment.
+2. Install dependencies:
+	- `pip install -r requirements.txt`
+3. Start the application (backend + frontend served by FastAPI):
+	- Windows: `.\.venv\Scripts\python.exe -m uvicorn app.main:app --reload`
+4. Open the app in the browser:
+	- `http://127.0.0.1:8000`
+
 ## Tips
 - **Be Fearless with AI:** you are *highly* encouraged to use AI tools (Cursor, Copilot, Claude Code, etc). There are zero limits.
 - **No Cold-Start:** the app will only be interesting if you have a good data set. We shouldn't have to manually create users to test your app. The more data, the better.
