@@ -16,7 +16,134 @@ const DAY_KEYS = [
   "SATURDAY",
 ];
 
-const fmtDate = (value) => new Date(value).toISOString().slice(0, 10);
+const PIPELINE_STEPS = [
+  {
+    id: "01",
+    title: "Define demand rules",
+    description: "Set staffing demand by day scope, shift, and role counts.",
+  },
+  {
+    id: "02",
+    title: "Autofill from rules",
+    description: "Run day or weekend fill to assign people based on rules and availability.",
+  },
+  {
+    id: "03",
+    title: "Swap and fill gaps",
+    description: "Remove or swap assignments and let the solver refill missing slots.",
+  },
+  {
+    id: "04",
+    title: "Validate constraints",
+    description: "Check unfilled roles, availability limits, and weekly-hour constraints.",
+  },
+  {
+    id: "05",
+    title: "Iterate by chat",
+    description: "Refine rules and assignments until coverage and quality are acceptable.",
+  },
+];
+
+const COMMAND_META = {
+  AUTOFILL_DAY: { label: "Autofill", tone: "autofill", marker: "AF" },
+  SWAP_ASSIGNMENT: { label: "Swap/Remove", tone: "swap", marker: "SW" },
+  SET_RULE: { label: "Set Rule", tone: "rule", marker: "SR" },
+  VALIDATION: { label: "Validation", tone: "validation", marker: "VD" },
+};
+
+const CHAT_TEST_PIPELINE = [
+  {
+    title: "A. Define schedule demand",
+    objective: "Validate SET_RULE for weekday/weekend scopes and multiple role counts.",
+    prompts: [
+      {
+        command: "SET_RULE",
+        text: "On weekends we need 3 cooks, 2 dishwashers, 8 waitstaff, 1 manager",
+      },
+      {
+        command: "SET_RULE",
+        text: "On weekdays we need 2 cooks, 1 dishwasher, 4 waitstaff, 1 manager",
+      },
+    ],
+  },
+  {
+    title: "B. Autofill from configured rules",
+    objective: "Validate weekend/day fills driven by schedule rules and team availability.",
+    prompts: [
+      {
+        command: "AUTOFILL_DAY",
+        text: "Fill weekend",
+      },
+      {
+        command: "AUTOFILL_DAY",
+        text: "Fill Monday",
+      },
+    ],
+  },
+  {
+    title: "C. Targeted fill overrides",
+    objective: "Validate role-specific and shift-specific fill commands.",
+    prompts: [
+      {
+        command: "AUTOFILL_DAY",
+        text: "Fill 2026-03-16 with 2 cooks and 1 dishwasher for lunch",
+      },
+      {
+        command: "AUTOFILL_DAY",
+        text: "Fill 2026-03-16 dinner and reoptimize",
+      },
+    ],
+  },
+  {
+    title: "D. Swap/remove and fill gaps",
+    objective: "Validate assignment updates and automatic gap recovery.",
+    prompts: [
+      {
+        command: "SWAP_ASSIGNMENT",
+        text: "Remove Ana Silva from dinner on 2026-03-16 and fill the gap",
+      },
+      {
+        command: "SWAP_ASSIGNMENT",
+        text: "Swap Bruno Costa with Camila Rocha on dinner 2026-03-16",
+      },
+    ],
+  },
+  {
+    title: "E. Validation and non-command checks",
+    objective: "Confirm friendly 400 errors for off-topic or unsupported inputs.",
+    prompts: [
+      {
+        command: "VALIDATION",
+        text: "Hi",
+      },
+      {
+        command: "VALIDATION",
+        text: "What is the weather today?",
+      },
+    ],
+  },
+];
+
+const getRouteFromPath = (path) => {
+  if (path === "/weekly") return "weekly";
+  if (path === "/guide") return "guide";
+  return "daily";
+};
+
+const getPathFromRoute = (route) => {
+  if (route === "weekly") return "/weekly";
+  if (route === "guide") return "/guide";
+  return "/";
+};
+
+const fmtDate = (value) => {
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+};
 const toDate = (value) => new Date(`${value}T00:00:00`);
 const addDays = (value, amount) => {
   const date = new Date(value);
@@ -94,11 +221,20 @@ const fetchJson = async (url, options = {}) => {
 const summarizeResponse = (payload) => {
   if (!payload) return "Done.";
   if (payload.action_type === "AUTOFILL_DAY") {
+    const dateResults = payload.result?.dates || [];
+    if (dateResults.length > 0) {
+      return dateResults
+        .map((entry) => {
+          const dateLabel = entry.date || "unknown-date";
+          const shifts = entry.results || [];
+          const created = shifts.reduce((sum, item) => sum + (item.created || 0), 0);
+          return `${dateLabel}: ${created} filled`;
+        })
+        .join(" | ");
+    }
+
     const results = payload.result?.results || [];
     return results.map((item) => `${item.shift_type}: ${item.created} filled`).join(" | ");
-  }
-  if (payload.action_type === "LIST_SCHEDULE") {
-    return `Loaded ${payload.result?.length || 0} shifts.`;
   }
   if (payload.action_type === "SWAP_ASSIGNMENT") {
     return `Swap applied (old: ${payload.result?.old_employee_id}, new: ${payload.result?.new_employee_id}).`;
@@ -141,6 +277,89 @@ const buildRuleRequirements = (rules) => {
   return map;
 };
 
+const buildRuleRequirementsByRole = (rules) => {
+  const map = new Map();
+  (rules || []).forEach((rule) => {
+    const roleId = Number(rule.role_id);
+    if (!Number.isFinite(roleId)) return;
+    const key = `${(rule.day_of_week || "").toUpperCase()}__${(rule.shift_type || "").toUpperCase()}__${roleId}`;
+    const prev = map.get(key) || 0;
+    map.set(key, prev + (rule.required_count || 0));
+  });
+  return map;
+};
+
+const buildRoleNameMap = (roles) => {
+  const map = new Map();
+  (roles || []).forEach((role) => {
+    if (role?.id == null) return;
+    map.set(role.id, role.name || `Role ${role.id}`);
+  });
+  return map;
+};
+
+const getShiftDisplayAssignments = (
+  shift,
+  dayKey,
+  shiftType,
+  ruleRequirementsByRole,
+  roleNamesById
+) => {
+  const assignments = shift?.assignments || [];
+  const prefix = `${dayKey}__${shiftType}__`;
+  const requiredEntries = [...(ruleRequirementsByRole?.entries() || [])]
+    .filter(([key, count]) => key.startsWith(prefix) && count > 0)
+    .map(([key, count]) => {
+      const roleId = Number(key.slice(prefix.length));
+      return { roleId, count };
+    })
+    .filter((item) => Number.isFinite(item.roleId))
+    .sort((a, b) => {
+      const left = roleNamesById.get(a.roleId) || `Role ${a.roleId}`;
+      const right = roleNamesById.get(b.roleId) || `Role ${b.roleId}`;
+      return left.localeCompare(right);
+    });
+
+  if (requiredEntries.length === 0) {
+    return assignments;
+  }
+
+  const grouped = new Map();
+  assignments.forEach((item) => {
+    const roleId = Number(item.role_id);
+    if (!Number.isFinite(roleId)) return;
+    if (!grouped.has(roleId)) grouped.set(roleId, []);
+    grouped.get(roleId).push(item);
+  });
+
+  const requiredRoleIds = new Set(requiredEntries.map((item) => item.roleId));
+  const displayed = [];
+
+  requiredEntries.forEach(({ roleId, count }) => {
+    const existing = grouped.get(roleId) || [];
+    existing.forEach((item) => displayed.push(item));
+
+    const missing = Math.max(0, count - existing.length);
+    for (let index = 0; index < missing; index += 1) {
+      displayed.push({
+        role_id: roleId,
+        role_name: roleNamesById.get(roleId) || `Role ${roleId}`,
+        employee_id: null,
+        employee_name: null,
+      });
+    }
+  });
+
+  assignments.forEach((item) => {
+    const roleId = Number(item.role_id);
+    if (!Number.isFinite(roleId) || !requiredRoleIds.has(roleId)) {
+      displayed.push(item);
+    }
+  });
+
+  return displayed;
+};
+
 const getShiftSemanticStatus = (shift, isChanged, requiredCount) => {
   if (isChanged) return "semantic-conflict";
 
@@ -172,9 +391,6 @@ function ChatWidget({
   messages,
   onSend,
   onClear,
-  pendingPreview,
-  onConfirmPreview,
-  onCancelPreview,
 }) {
   const [isOpen, setIsOpen] = useState(true);
   const [input, setInput] = useState("");
@@ -216,24 +432,6 @@ function ChatWidget({
                         html`<div key=${index} className=${`message ${msg.role}`}>${msg.text}</div>`
                     )}
               </div>
-              ${pendingPreview
-                ? html`
-                    <div className="preview-card">
-                      <p className="preview-title">Impact preview</p>
-                      <p className="preview-text">${pendingPreview.preview_message}</p>
-                      <p className="preview-metrics">
-                        ${pendingPreview.impact.assignments} assignments | ${pendingPreview.impact.shifts}
-                        shifts | ${pendingPreview.impact.people} people
-                      </p>
-                      <div className="preview-actions">
-                        <button type="button" className="primary" onClick=${onConfirmPreview}>
-                          Confirm
-                        </button>
-                        <button type="button" onClick=${onCancelPreview}>Cancel</button>
-                      </div>
-                    </div>
-                  `
-                : null}
               <form className="chat-form" onSubmit=${submit}>
                 <textarea
                   rows="3"
@@ -267,8 +465,9 @@ function DailyView({
   onPrevDay,
   onNextDay,
   onToday,
-  onAutofill,
   ruleRequirements,
+  ruleRequirementsByRole,
+  roleNamesById,
 }) {
   const byType = useMemo(
     () => new Map((shifts || []).map((shift) => [shift.shift_type, shift])),
@@ -286,7 +485,6 @@ function DailyView({
           <button type="button" onClick=${onPrevDay}>Prev Day</button>
           <button type="button" onClick=${onToday}>Today</button>
           <button type="button" onClick=${onNextDay}>Next Day</button>
-          <button type="button" className="primary" onClick=${onAutofill}>Autofill Day</button>
         </div>
         <div className="daily-side-controls">
           <label className="daily-date-input">
@@ -314,10 +512,17 @@ function DailyView({
       <div className="schedule-grid-day">
         ${SHIFT_TYPES.map((type) => {
           const shift = byType.get(type) || { date: actionDate, shift_type: type, assignments: [] };
-          const assignmentCount = shift.assignments.length;
-          const assignedCount = (shift.assignments || []).filter((item) => item.employee_id != null).length;
           const isChanged = changedTypes.has(type);
           const dayKey = getDayOfWeek(shift.date || actionDate);
+          const displayAssignments = getShiftDisplayAssignments(
+            shift,
+            dayKey,
+            type,
+            ruleRequirementsByRole,
+            roleNamesById
+          );
+          const assignmentCount = displayAssignments.length;
+          const assignedCount = displayAssignments.filter((item) => item.employee_id != null).length;
           const requiredCount = ruleRequirements.get(`${dayKey}__${type}`) || 0;
           const semanticStatus = getShiftSemanticStatus(shift, isChanged, requiredCount);
           return html`
@@ -331,9 +536,9 @@ function DailyView({
                 </div>
               </div>
               <div className="daily-assignment-list">
-                ${shift.assignments.length === 0
+                ${displayAssignments.length === 0
                   ? html`<div className="assignment"><span className="role">No assignments</span><span className="employee">-</span></div>`
-                  : shift.assignments.map(
+                  : displayAssignments.map(
                       (item, index) => html`
                         <div className="assignment" key=${`${type}-${index}`}>
                           <span className="role">${item.role_name}</span>
@@ -359,10 +564,10 @@ function WeeklyView({
   onThisWeek,
   onNextWeek,
   onToday,
-  onAutofillWeek,
   onOpenDay,
-  onAutofillDay,
   ruleRequirements,
+  ruleRequirementsByRole,
+  roleNamesById,
 }) {
   const byKey = useMemo(
     () => new Map((shifts || []).map((shift) => [shiftKey(shift.date, shift.shift_type), shift])),
@@ -383,9 +588,6 @@ function WeeklyView({
           <button type="button" onClick=${onThisWeek}>This Week</button>
           <button type="button" onClick=${onNextWeek}>Next Week</button>
           <button type="button" onClick=${onToday}>Today</button>
-          <button type="button" className="primary" onClick=${onAutofillWeek}>
-            Autofill Week
-          </button>
         </div>
         <label className="weekly-week-input">
           <span>Week Start</span>
@@ -424,22 +626,22 @@ function WeeklyView({
                 <button type="button" className="mini-btn" onClick=${() => onOpenDay(date)}>
                   Open
                 </button>
-                <button
-                  type="button"
-                  className="mini-btn mini-btn-primary"
-                  onClick=${() => onAutofillDay(date)}
-                >
-                  Fill
-                </button>
               </div>
             </div>
             ${SHIFT_TYPES.map((type) => {
               const key = shiftKey(date, type);
               const shift = byKey.get(key) || { date, shift_type: type, assignments: [] };
-              const assignmentCount = shift.assignments.length;
-              const assignedCount = (shift.assignments || []).filter((item) => item.employee_id != null).length;
               const isChanged = changedKeys.has(key);
               const dayKey = getDayOfWeek(date);
+              const displayAssignments = getShiftDisplayAssignments(
+                shift,
+                dayKey,
+                type,
+                ruleRequirementsByRole,
+                roleNamesById
+              );
+              const assignmentCount = displayAssignments.length;
+              const assignedCount = displayAssignments.filter((item) => item.employee_id != null).length;
               const requiredCount = ruleRequirements.get(`${dayKey}__${type}`) || 0;
               const semanticStatus = getShiftSemanticStatus(shift, isChanged, requiredCount);
               return html`
@@ -455,9 +657,9 @@ function WeeklyView({
                     </div>
                   </div>
                   <div className="weekly-assignment-list">
-                    ${shift.assignments.length === 0
+                    ${displayAssignments.length === 0
                       ? html`<div className="assignment"><span className="role">No assignments</span><span className="employee">-</span></div>`
-                      : shift.assignments.map(
+                      : displayAssignments.map(
                           (item, index) => html`
                             <div className="assignment" key=${`${key}-${index}`}>
                               <span className="role">${item.role_name}</span>
@@ -473,6 +675,93 @@ function WeeklyView({
         `)}
       </div>
     </div>
+  `;
+}
+
+function GuideView({ health, onCopyPrompt, onSendPrompt }) {
+  return html`
+    <section className="panel guide-panel">
+      <div className="panel-header">
+        <h2>How It Works</h2>
+        <span className="pill">${health}</span>
+      </div>
+
+      <p className="guide-intro">
+        This project centers on three operations: define schedule demand, autofill based on
+        rules and availability, and swap/remove assignments while refilling gaps through chat.
+      </p>
+
+      <div className="guide-section">
+        <h3>Operational Pipeline</h3>
+        <div className="pipeline-grid">
+          ${PIPELINE_STEPS.map(
+            (step) => html`
+              <article className="pipeline-card" key=${step.id}>
+                <div className="pipeline-index">${step.id}</div>
+                <h4>${step.title}</h4>
+                <p>${step.description}</p>
+              </article>
+            `
+          )}
+        </div>
+      </div>
+
+      <div className="guide-section">
+        <h3>Chat Prompt Test Pipeline</h3>
+        <p className="guide-helper">
+          Use these suites to validate challenge coverage end to end: demand definition,
+          rule-driven autofill, assignment swaps, and validation responses.
+        </p>
+        <div className="command-legend">
+          ${Object.entries(COMMAND_META).map(
+            ([command, meta]) => html`
+              <span className=${`command-chip command-chip-${meta.tone}`} key=${command}>
+                <span className="command-marker">${meta.marker}</span>
+                <span>${meta.label}</span>
+              </span>
+            `
+          )}
+        </div>
+        <div className="prompt-suite-grid">
+          ${CHAT_TEST_PIPELINE.map(
+            (suite) => html`
+              <article className="prompt-suite-card" key=${suite.title}>
+                <h4>${suite.title}</h4>
+                <p>${suite.objective}</p>
+                <div className="prompt-items">
+                  ${suite.prompts.map((prompt) => {
+                    const meta = COMMAND_META[prompt.command] || COMMAND_META.VALIDATION;
+                    return html`
+                      <div className=${`prompt-item prompt-item-${meta.tone}`} key=${`${suite.title}-${prompt.text}`}>
+                        <div className="prompt-header">
+                          <span className=${`command-chip command-chip-${meta.tone}`}>
+                            <span className="command-marker">${meta.marker}</span>
+                            <span>${meta.label}</span>
+                          </span>
+                        </div>
+                        <p className="prompt-text">${prompt.text}</p>
+                        <div className="prompt-actions">
+                          <button type="button" className="mini-btn" onClick=${() => onCopyPrompt(prompt.text)}>
+                            Copy
+                          </button>
+                          <button
+                            type="button"
+                            className="mini-btn mini-btn-primary"
+                            onClick=${() => onSendPrompt(prompt.text)}
+                          >
+                            Send to Chat
+                          </button>
+                        </div>
+                      </div>
+                    `;
+                  })}
+                </div>
+              </article>
+            `
+          )}
+        </div>
+      </div>
+    </section>
   `;
 }
 
@@ -529,7 +818,7 @@ function App() {
   const initialToday = fmtDate(new Date());
   const initialWeek = getWeekStart(initialToday);
 
-  const [route, setRoute] = useState(window.location.pathname === "/weekly" ? "weekly" : "daily");
+  const [route, setRoute] = useState(getRouteFromPath(window.location.pathname));
   const [health, setHealth] = useState("Checking API...");
   const [messages, setMessages] = useState([]);
 
@@ -541,21 +830,26 @@ function App() {
   const [weeklyShifts, setWeeklyShifts] = useState([]);
   const [teamInsights, setTeamInsights] = useState([]);
   const [scheduleRules, setScheduleRules] = useState([]);
+  const [roles, setRoles] = useState([]);
   const [changedDayTypes, setChangedDayTypes] = useState(new Set());
   const [changedWeekKeys, setChangedWeekKeys] = useState(new Set());
-  const [pendingPreview, setPendingPreview] = useState(null);
   const ruleRequirements = useMemo(() => buildRuleRequirements(scheduleRules), [scheduleRules]);
+  const ruleRequirementsByRole = useMemo(
+    () => buildRuleRequirementsByRole(scheduleRules),
+    [scheduleRules]
+  );
+  const roleNamesById = useMemo(() => buildRoleNameMap(roles), [roles]);
 
   useEffect(() => {
     const onPopState = () => {
-      setRoute(window.location.pathname === "/weekly" ? "weekly" : "daily");
+      setRoute(getRouteFromPath(window.location.pathname));
     };
     window.addEventListener("popstate", onPopState);
     return () => window.removeEventListener("popstate", onPopState);
   }, []);
 
   const navigate = (targetRoute) => {
-    const path = targetRoute === "weekly" ? "/weekly" : "/";
+    const path = getPathFromRoute(targetRoute);
     if (window.location.pathname !== path) {
       window.history.pushState({}, "", path);
     }
@@ -592,6 +886,12 @@ function App() {
     return data;
   };
 
+  const refreshRoles = async () => {
+    const data = await fetchJson("/roles");
+    setRoles(data);
+    return data;
+  };
+
   const runChatCommand = async (message, action = null) => {
     const beforeDayMap = buildDayMap(dailyShifts);
     const beforeWeekMap = buildWeekMap(weeklyShifts);
@@ -600,7 +900,7 @@ function App() {
     if (message) payload.message = message;
     if (action) payload.action = action;
 
-    const response = await fetchJson("/chat/command", {
+    const response = await fetchJson("/chat", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
@@ -616,14 +916,6 @@ function App() {
       if (targetDate) {
         nextActionDate = targetDate;
         nextWeekStart = getWeekStart(targetDate);
-      }
-    }
-
-    if (response.action_type === "LIST_SCHEDULE") {
-      const startDate = response.result?.[0]?.date;
-      if (startDate) {
-        nextActionDate = startDate;
-        nextWeekStart = getWeekStart(startDate);
       }
     }
 
@@ -658,6 +950,7 @@ function App() {
       await refreshWeek(initialWeek);
       await refreshInsights(initialWeek);
       await refreshRules();
+      await refreshRoles();
     };
 
     bootstrap();
@@ -667,47 +960,21 @@ function App() {
   const onSendChat = async (text) => {
     appendMessage("user", text);
     try {
-      const preview = await fetchJson("/chat/preview", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message: text }),
-      });
-      setPendingPreview({ ...preview, message: text });
-      appendMessage("system", preview.preview_message);
+      await runChatCommand(text);
     } catch (error) {
       appendMessage("system", `Error: ${error.message}`);
     }
   };
 
-  const onConfirmPreview = async () => {
-    if (!pendingPreview) return;
-
+  const onCopyPrompt = async (prompt) => {
     try {
-      await runChatCommand(pendingPreview.message || "", pendingPreview.action || null);
-      setPendingPreview(null);
-    } catch (error) {
-      appendMessage("system", `Error: ${error.message}`);
-    }
-  };
-
-  const onCancelPreview = () => {
-    if (!pendingPreview) return;
-    setPendingPreview(null);
-    appendMessage("system", "Preview canceled.");
-  };
-
-  const onAutofill = async () => {
-    appendMessage("user", `autofill ${actionDate}`);
-    setPendingPreview(null);
-
-    try {
-      await runChatCommand(`autofill ${actionDate}`, {
-        type: "AUTOFILL_DAY",
-        date: actionDate,
-        reoptimize,
-      });
-    } catch (error) {
-      appendMessage("system", `Error: ${error.message}`);
+      if (!navigator.clipboard || !navigator.clipboard.writeText) {
+        throw new Error("Clipboard API unavailable");
+      }
+      await navigator.clipboard.writeText(prompt);
+      appendMessage("system", `Prompt copied: ${prompt}`);
+    } catch {
+      appendMessage("system", "Clipboard unavailable. Copy the prompt manually from the guide.");
     }
   };
 
@@ -790,50 +1057,6 @@ function App() {
     }
   };
 
-  const onAutofillWeek = async () => {
-    setPendingPreview(null);
-    const targetWeekStart = getWeekStart(weekStart);
-    const dates = getWeekDates(targetWeekStart);
-
-    setWeekStart(targetWeekStart);
-    const beforeWeekMap = buildWeekMap(weeklyShifts);
-    const beforeDayMap = buildDayMap(dailyShifts);
-    const selectedDateBefore = actionDate;
-
-    try {
-      let totalFilled = 0;
-
-      for (const date of dates) {
-        const payload = {
-          date,
-          reoptimize: false,
-        };
-        const response = await fetchJson("/schedules/autofill", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(payload),
-        });
-
-        const dayFilled = (response.results || []).reduce(
-          (sum, item) => sum + (item.created || 0),
-          0
-        );
-        totalFilled += dayFilled;
-      }
-
-      appendMessage("system", `Weekly autofill completed: ${totalFilled} assignments created.`);
-
-      const weekData = await refreshWeek(targetWeekStart);
-      const dayData = await refreshDay(selectedDateBefore);
-      await refreshInsights(targetWeekStart);
-
-      setChangedWeekKeys(diffMaps(beforeWeekMap, buildWeekMap(weekData)));
-      setChangedDayTypes(diffMaps(beforeDayMap, buildDayMap(dayData)));
-    } catch (error) {
-      appendMessage("system", `Error: ${error.message}`);
-    }
-  };
-
   const onOpenDayFromWeek = async (date) => {
     setActionDate(date);
     setWeekStart(getWeekStart(date));
@@ -842,33 +1065,6 @@ function App() {
     try {
       await refreshDay(date);
       setChangedDayTypes(new Set());
-    } catch (error) {
-      appendMessage("system", `Error: ${error.message}`);
-    }
-  };
-
-  const onAutofillDayFromWeek = async (date) => {
-    setPendingPreview(null);
-    const beforeWeekMap = buildWeekMap(weeklyShifts);
-    const beforeDayMap = buildDayMap(dailyShifts);
-
-    try {
-      const response = await fetchJson("/schedules/autofill", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ date, reoptimize: false }),
-      });
-
-      const filled = (response.results || []).reduce((sum, item) => sum + (item.created || 0), 0);
-      appendMessage("system", `${date}: ${filled} assignments created.`);
-
-      const normalizedWeek = getWeekStart(date);
-      const weekData = await refreshWeek(normalizedWeek);
-      const dayData = await refreshDay(actionDate);
-      await refreshInsights(normalizedWeek);
-
-      setChangedWeekKeys(diffMaps(beforeWeekMap, buildWeekMap(weekData)));
-      setChangedDayTypes(diffMaps(beforeDayMap, buildDayMap(dayData)));
     } catch (error) {
       appendMessage("system", `Error: ${error.message}`);
     }
@@ -894,7 +1090,7 @@ function App() {
               className=${`tab-btn ${route === "daily" ? "active" : ""}`}
               onClick=${() => navigate("daily")}
             >
-              Main Page (Daily)
+              Daily Page
             </button>
             <button
               type="button"
@@ -902,6 +1098,13 @@ function App() {
               onClick=${() => navigate("weekly")}
             >
               Weekly Page
+            </button>
+            <button
+              type="button"
+              className=${`tab-btn ${route === "guide" ? "active" : ""}`}
+              onClick=${() => navigate("guide")}
+            >
+              How It Works
             </button>
           </div>
           <div className="status-badge">
@@ -923,13 +1126,15 @@ function App() {
                   onPrevDay=${onPrevDay}
                   onNextDay=${onNextDay}
                   onToday=${onToday}
-                  onAutofill=${onAutofill}
                   ruleRequirements=${ruleRequirements}
+                  ruleRequirementsByRole=${ruleRequirementsByRole}
+                  roleNamesById=${roleNamesById}
                 />
               </section>
               <${TeamInsightsPanel} weekStart=${weekStart} insights=${teamInsights} />
             `
-          : html`
+          : route === "weekly"
+            ? html`
               <section className="weekly-layout">
                 <${WeeklyView}
                   weekStart=${weekStart}
@@ -940,14 +1145,21 @@ function App() {
                   onThisWeek=${onThisWeek}
                   onNextWeek=${onNextWeek}
                   onToday=${onToday}
-                  onAutofillWeek=${onAutofillWeek}
                   onOpenDay=${onOpenDayFromWeek}
-                  onAutofillDay=${onAutofillDayFromWeek}
                   ruleRequirements=${ruleRequirements}
+                  ruleRequirementsByRole=${ruleRequirementsByRole}
+                  roleNamesById=${roleNamesById}
                 />
               </section>
               <${TeamInsightsPanel} weekStart=${weekStart} insights=${teamInsights} />
-            `}
+            `
+            : html`
+                <${GuideView}
+                  health=${health}
+                  onCopyPrompt=${onCopyPrompt}
+                  onSendPrompt=${onSendChat}
+                />
+              `}
       </main>
 
       <${ChatWidget}
@@ -955,11 +1167,7 @@ function App() {
         onSend=${onSendChat}
         onClear=${() => {
           setMessages([]);
-          setPendingPreview(null);
         }}
-        pendingPreview=${pendingPreview}
-        onConfirmPreview=${onConfirmPreview}
-        onCancelPreview=${onCancelPreview}
       />
     </div>
   `;

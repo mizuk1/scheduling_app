@@ -31,7 +31,14 @@ apiBaseLabel.textContent = apiBase || "/";
 const SHIFT_TYPES = ["LUNCH", "DINNER"];
 const DAY_LABELS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
-const fmtDate = (value) => new Date(value).toISOString().slice(0, 10);
+const fmtDate = (value) => {
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+};
 const toDate = (value) => new Date(`${value}T00:00:00`);
 const addDays = (value, amount) => {
   const date = new Date(value);
@@ -93,13 +100,22 @@ const fetchJson = async (url, options = {}) => {
 const summarizeResponse = (payload) => {
   if (!payload) return "Done.";
   if (payload.action_type === "AUTOFILL_DAY") {
+    const dateResults = payload.result?.dates || [];
+    if (dateResults.length > 0) {
+      return dateResults
+        .map((entry) => {
+          const dateLabel = entry.date || "unknown-date";
+          const shifts = entry.results || [];
+          const created = shifts.reduce((sum, item) => sum + (item.created || 0), 0);
+          return `${dateLabel}: ${created} filled`;
+        })
+        .join(" | ");
+    }
+
     const results = payload.result?.results || [];
     return results
       .map((item) => `${item.shift_type}: ${item.created} filled`)
       .join(" | ");
-  }
-  if (payload.action_type === "LIST_SCHEDULE") {
-    return `Loaded ${payload.result?.length || 0} shifts.`;
   }
   if (payload.action_type === "SWAP_ASSIGNMENT") {
     return `Swap applied (old: ${payload.result?.old_employee_id}, new: ${payload.result?.new_employee_id}).`;
@@ -329,26 +345,13 @@ const runChatCommand = async (message, action = null) => {
     payload.action = action;
   }
 
-  const response = await fetchJson("/chat/command", {
+  const response = await fetchJson("/chat", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
   });
 
   appendMessage("system", summarizeResponse(response));
-
-  if (response.action_type === "LIST_SCHEDULE") {
-    const startDate = response.result?.[0]?.date;
-    if (startDate) {
-      if (actionDateInput) {
-        actionDateInput.value = startDate;
-      }
-      if (weekStartInput) {
-        weekStartInput.value = getWeekStart(startDate);
-        currentWeekStart = weekStartInput.value;
-      }
-    }
-  }
 
   if (response.action_type === "AUTOFILL_DAY") {
     const targetDate = action?.date || response.result?.date;

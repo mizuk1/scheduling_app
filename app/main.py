@@ -31,3 +31,8 @@ def index() -> FileResponse:
 @app.get("/weekly")
 def weekly_page() -> FileResponse:
     return FileResponse(WEB_DIR / "index.html")
+
+
+@app.get("/guide")
+def guide_page() -> FileResponse:
+    return FileResponse(WEB_DIR / "index.html")

@@ -386,18 +386,28 @@ def swap_assignment(
             unfilled=fill_result.unfilled,
         )
 
-    if not _is_employee_eligible(
-        session, replacement_employee_id, assignment.role_id, day_of_week, shift.shift_type
-    ):
-        raise ValueError("Replacement employee is not eligible for this role/shift.")
-
     already_assigned = session.exec(
         select(Assignment)
         .where(Assignment.shift_id == shift.id)
         .where(Assignment.employee_id == replacement_employee_id)
     ).first()
-    if already_assigned:
+    if already_assigned and already_assigned.id != assignment.id:
         raise ValueError("Replacement employee is already assigned in this shift.")
+
+    if assignment.employee_id == replacement_employee_id:
+        return SwapResult(
+            date=shift.date,
+            shift_type=shift.shift_type,
+            old_employee_id=assignment.employee_id,
+            new_employee_id=replacement_employee_id,
+            created=0,
+            unfilled={},
+        )
+
+    if not _is_employee_eligible(
+        session, replacement_employee_id, assignment.role_id, day_of_week, shift.shift_type
+    ):
+        raise ValueError("Replacement employee is not eligible for this role/shift.")
 
     week_start, week_end = _get_week_range(shift.date)
     weekly_hours = _load_weekly_hours(session, week_start, week_end)

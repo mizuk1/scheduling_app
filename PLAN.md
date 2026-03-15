@@ -68,7 +68,7 @@ The default behavior is **non-disruptive**: when filling a new day, existing ass
 - `GET /schedule-rules`
 - `POST /schedules/autofill`
 - `POST /schedules/swap`
-- `POST /chat/command`
+- `POST /chat`
 
 ## 8. Seed Data Strategy
 

@@ -5,3 +5,5 @@ python-dotenv
 pydantic-settings
 pytest
 openai
+langchain-core
+langchain-openai

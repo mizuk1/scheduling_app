@@ -108,8 +108,6 @@ class ChatAction(SQLModel):
     reoptimize: bool = False
     assignment_id: int | None = None
     replacement_employee_id: int | None = None
-    start_date: dt.date | None = None
-    end_date: dt.date | None = None
     day_of_week: str | None = None
     shift_type: str | None = None
     role_id: int | None = None
@@ -132,21 +130,6 @@ class ChatCommandResponse(SQLModel):
     status: str
     action_type: str
     result: Any | None = None
-
-
-class ChatImpactPreview(SQLModel):
-    shifts: int
-    people: int
-    assignments: int
-    summary: str
-
-
-class ChatPreviewResponse(SQLModel):
-    status: str
-    action_type: str
-    action: ChatAction
-    impact: ChatImpactPreview
-    preview_message: str
 
 
 class ScheduleRuleRead(SQLModel):
