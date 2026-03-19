@@ -13,7 +13,7 @@ from app.models.scheduling import (
 )
 from app.api.routes.employees import list_employee_insights
 from app.seed.seed_data import seed_db
-from app.services.scheduler import fill_day
+from app.services.scheduler import fill_day, swap_assignment
 
 
 def create_session() -> Session:
@@ -114,3 +114,45 @@ def test_fill_day_with_custom_requirements_for_selected_shift() -> None:
 
         assert len(assignments) <= 1
         assert all(assignment.role_id == role.id for assignment in assignments)
+
+
+def test_swap_assignment_without_replacement_uses_constraints_when_candidate_exists() -> None:
+    with create_session() as session:
+        seed_db(session)
+
+        cook = session.exec(select(Role).where(Role.name == "Cook")).first()
+        assert cook is not None
+
+        fill_day(
+            session,
+            date(2026, 3, 18),
+            reoptimize=True,
+            requirements_by_shift={"LUNCH": {cook.id: 1}},
+            shift_types=["LUNCH"],
+        )
+
+        lunch_shift = session.exec(
+            select(Shift)
+            .where(Shift.date == date(2026, 3, 18))
+            .where(Shift.shift_type == "LUNCH")
+        ).first()
+        assert lunch_shift is not None
+
+        target_assignment = session.exec(
+            select(Assignment)
+            .where(Assignment.shift_id == lunch_shift.id)
+            .where(Assignment.role_id == cook.id)
+        ).first()
+        assert target_assignment is not None
+        assert target_assignment.id is not None
+        assert target_assignment.employee_id is not None
+
+        old_employee_id = target_assignment.employee_id
+
+        result = swap_assignment(session, target_assignment.id)
+
+        assert result is not None
+        assert result.old_employee_id == old_employee_id
+        assert result.new_employee_id is not None
+        assert result.new_employee_id != old_employee_id
+        assert result.created == 0

@@ -130,6 +130,28 @@ def _is_add_like_message(message: str | None) -> bool:
     )
 
 
+def _message_requires_replacement_employee(
+    message: str | None,
+    mentioned_employees: Sequence[Employee],
+) -> bool:
+    normalized = _normalize_message(message)
+    if not normalized:
+        return False
+
+    if re.search(r"\b(add|assign)\b", normalized):
+        return True
+
+    if re.search(r"\breplace\b.*\bwith\b", normalized):
+        return True
+
+    if re.search(r"\bswap\b", normalized):
+        if _message_has_with_clause(message):
+            return True
+        return len(mentioned_employees) >= 2
+
+    return False
+
+
 def _message_has_with_clause(message: str | None) -> bool:
     return bool(re.search(r"\bwith\b", _normalize_message(message)))
 
@@ -336,12 +358,13 @@ def _resolve_action(payload: ChatCommandRequest, session: Session) -> ChatAction
         _validate_autofill_day_consistency(payload.message, action)
         _validate_swap_action_consistency(payload.message, action, session)
 
-    if (
-        _is_add_like_message(payload.message)
-        and action.type == "SWAP_ASSIGNMENT"
-        and action.replacement_employee_id is None
-    ):
-        raise ValueError("replacement_employee_id is required for add/assign intents")
+    if action.type == "SWAP_ASSIGNMENT" and action.replacement_employee_id is None:
+        employees = session.exec(
+            select(Employee).where(Employee.is_active == True)
+        ).all()
+        mentioned_employees = _find_employee_mentions(payload.message, employees)
+        if _message_requires_replacement_employee(payload.message, mentioned_employees):
+            raise ValueError("replacement_employee_id is required for add/assign intents")
 
     return action
 

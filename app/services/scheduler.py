@@ -357,6 +357,68 @@ def fill_day(
     return results
 
 
+def _select_replacement_employee_with_constraints(
+    session: Session,
+    assignment: Assignment,
+    shift: Shift,
+) -> int | None:
+    day_of_week = get_day_of_week(shift.date)
+    domains_by_role = _build_role_domains(session, day_of_week, shift.shift_type)
+    role_domain = [
+        employee_id
+        for employee_id in domains_by_role.get(assignment.role_id, [])
+        if employee_id != assignment.employee_id
+    ]
+    if not role_domain:
+        return None
+
+    shift_assignments = session.exec(
+        select(Assignment).where(Assignment.shift_id == shift.id)
+    ).all()
+    used = {
+        item.employee_id
+        for item in shift_assignments
+        if item.id != assignment.id and item.employee_id is not None
+    }
+
+    week_start, week_end = _get_week_range(shift.date)
+    weekly_hours = _load_weekly_hours(session, week_start, week_end)
+    max_hours = _build_max_hours(session)
+    shift_hours = SHIFT_HOURS.get(shift.shift_type, 0)
+
+    if assignment.employee_id is not None:
+        weekly_hours[assignment.employee_id] = max(
+            0, weekly_hours.get(assignment.employee_id, 0) - shift_hours
+        )
+
+    slots = [assignment.role_id]
+    domains = [role_domain]
+
+    solution = _solve_slots(
+        slots,
+        domains,
+        used.copy(),
+        weekly_hours.copy(),
+        max_hours,
+        shift_hours,
+    )
+    if solution:
+        return solution[0][1]
+
+    greedy_solution, _ = _greedy_assign(
+        slots,
+        domains,
+        used,
+        weekly_hours,
+        max_hours,
+        shift_hours,
+    )
+    if greedy_solution:
+        return greedy_solution[0][1]
+
+    return None
+
+
 def swap_assignment(
     session: Session,
     assignment_id: int,
@@ -374,6 +436,22 @@ def swap_assignment(
     old_employee_id = assignment.employee_id
 
     if replacement_employee_id is None:
+        auto_replacement_employee_id = _select_replacement_employee_with_constraints(
+            session, assignment, shift
+        )
+        if auto_replacement_employee_id is not None:
+            assignment.employee_id = auto_replacement_employee_id
+            session.add(assignment)
+            session.commit()
+            return SwapResult(
+                date=shift.date,
+                shift_type=shift.shift_type,
+                old_employee_id=old_employee_id,
+                new_employee_id=auto_replacement_employee_id,
+                created=0,
+                unfilled={},
+            )
+
         session.delete(assignment)
         session.commit()
         fill_result = fill_shift(session, shift.date, shift.shift_type)

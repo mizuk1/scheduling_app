@@ -678,6 +678,128 @@ def test_chat_replace_without_with_allows_remove_flow(monkeypatch) -> None:
         assert response.action_type == "SWAP_ASSIGNMENT"
 
 
+def test_chat_swap_from_phrase_allows_remove_flow(monkeypatch) -> None:
+    with create_session() as session:
+        seed_db(session)
+        fill_day(session, date(2026, 3, 22), reoptimize=True)
+
+        target = session.exec(
+            select(Assignment, Employee)
+            .join(Shift, Assignment.shift_id == Shift.id)
+            .join(Employee, Assignment.employee_id == Employee.id)
+            .where(Shift.date == date(2026, 3, 22))
+            .where(Shift.shift_type == "LUNCH")
+        ).first()
+        assert target is not None
+        target_assignment, target_employee = target
+        assert target_assignment.id is not None
+
+        def fake_parser(_message: str, _roles: list[dict[str, int | str]]) -> ChatAction:
+            return ChatAction(
+                type="SWAP_ASSIGNMENT",
+                assignment_id=target_assignment.id,
+                replacement_employee_id=None,
+            )
+
+        monkeypatch.setattr("app.api.routes.chat.parse_action_from_message", fake_parser)
+
+        payload = ChatCommandRequest(
+            message=f"swap {target_employee.name} from lunch on 2026-03-22"
+        )
+        response = chat_command(payload, session)
+
+        assert response.status == "APPLIED"
+        assert response.action_type == "SWAP_ASSIGNMENT"
+
+
+def test_chat_swap_with_phrase_requires_replacement(monkeypatch) -> None:
+    with create_session() as session:
+        seed_db(session)
+        fill_day(session, date(2026, 3, 22), reoptimize=True)
+
+        rows = session.exec(
+            select(Assignment, Employee)
+            .join(Shift, Assignment.shift_id == Shift.id)
+            .join(Employee, Assignment.employee_id == Employee.id)
+            .where(Shift.date == date(2026, 3, 22))
+            .where(Shift.shift_type == "DINNER")
+        ).all()
+        assert len(rows) >= 2
+        (target_assignment, target_employee), (_, replacement_employee) = rows[0], rows[1]
+        assert target_assignment.id is not None
+
+        def fake_parser(_message: str, _roles: list[dict[str, int | str]]) -> ChatAction:
+            return ChatAction(
+                type="SWAP_ASSIGNMENT",
+                assignment_id=target_assignment.id,
+                replacement_employee_id=None,
+            )
+
+        monkeypatch.setattr("app.api.routes.chat.parse_action_from_message", fake_parser)
+
+        payload = ChatCommandRequest(
+            message=(
+                f"swap {target_employee.name} with {replacement_employee.name} "
+                "on dinner 2026-03-22"
+            )
+        )
+        with pytest.raises(HTTPException) as exc_info:
+            chat_command(payload, session)
+
+        assert exc_info.value.status_code == 400
+        assert exc_info.value.detail == "replacement_employee_id is required for add/assign intents"
+
+
+def test_chat_swap_from_phrase_auto_selects_replacement_when_available(monkeypatch) -> None:
+    with create_session() as session:
+        seed_db(session)
+
+        cook = session.exec(select(Role).where(Role.name == "Cook")).first()
+        assert cook is not None
+
+        fill_day(
+            session,
+            date(2026, 3, 18),
+            reoptimize=True,
+            requirements_by_shift={"LUNCH": {cook.id: 1}},
+            shift_types=["LUNCH"],
+        )
+
+        target = session.exec(
+            select(Assignment, Employee)
+            .join(Shift, Assignment.shift_id == Shift.id)
+            .join(Employee, Assignment.employee_id == Employee.id)
+            .where(Shift.date == date(2026, 3, 18))
+            .where(Shift.shift_type == "LUNCH")
+            .where(Assignment.role_id == cook.id)
+        ).first()
+        assert target is not None
+        target_assignment, target_employee = target
+        assert target_assignment.id is not None
+        assert target_employee.id is not None
+
+        def fake_parser(_message: str, _roles: list[dict[str, int | str]]) -> ChatAction:
+            return ChatAction(
+                type="SWAP_ASSIGNMENT",
+                assignment_id=target_assignment.id,
+                replacement_employee_id=None,
+            )
+
+        monkeypatch.setattr("app.api.routes.chat.parse_action_from_message", fake_parser)
+
+        payload = ChatCommandRequest(
+            message=f"swap {target_employee.name} from lunch on 2026-03-18"
+        )
+        response = chat_command(payload, session)
+
+        assert response.status == "APPLIED"
+        assert response.action_type == "SWAP_ASSIGNMENT"
+        assert response.result is not None
+        assert response.result.get("old_employee_id") == target_employee.id
+        assert response.result.get("new_employee_id") is not None
+        assert response.result.get("new_employee_id") != target_employee.id
+
+
 def test_chat_command_returns_400_when_llm_unavailable_and_no_local_match(monkeypatch) -> None:
     with create_session() as session:
         seed_db(session)
